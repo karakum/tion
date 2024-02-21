@@ -254,7 +254,27 @@ class TionZonesPresets:
 
 
 class TionZones:
+    guid: str
+    name: str
+    type: str
+    color: str
+    is_virtual: bool
+    mode: TionZonesMode
+    schedule: TionZonesSchedule
+    sensors_average: list
+    hw_id: str
+    devices: list
+    order: int
+    creation_time_iso: str
+    creation_time: int
+    update_time_iso: str
+    update_time: int
+    presets: list
+
     def __init__(self, data: dict):
+        self.load(data)
+
+    def load(self, data: dict):
         self.guid = data.get("guid")  # edf54e75-9a3a-4cf4-9265-808be2d0e5e9
         self.name = data.get("name")  # Гостиная
         self.type = data.get("type")  # unkown
@@ -461,7 +481,31 @@ class TionZonesDevicesDataErrors:
 
 
 class Tion:
+    guid: str
+    name: str
+    comment: str
+    timezone: int
+    type: str
+    access_level: str
+    repository: str
+    mac: str
+    connection: TionConnection
+    update: TionUpdate
+    unique_key: str
+    replace_in_progress: bool
+    struct_received: bool
+    order: int
+    zones: dict[TionZones]
+    creation_time_iso: str
+    creation_time: int
+    update_time_iso: str
+    update_time: int
+
     def __init__(self, data: dict):
+        self.zones = {}
+        self.load(data)
+
+    def load(self, data: dict):
         self.guid = data.get("guid")  # 9c5e1f19-36ed-4b26-8c11-5d1b4bf37b91
         self.name = data.get("name")  # Дом
         self.comment = data.get("comment")  #
@@ -476,9 +520,12 @@ class Tion:
         self.replace_in_progress = data.get("replace_in_progress")  #
         self.struct_received = data.get("struct_received")  # True
         self.order = data.get("order")  #
-        self.zones = []
         for item in data.get("zones", []):
-            self.zones.append(TionZones(item))
+            guid = item.get("guid")
+            if (zone := self.zones.get(guid, None)) is not None:
+                zone.load(item)
+            else:
+                self.zones[guid]=TionZones(item)
         self.creation_time_iso = data.get("creation_time_iso")  # 2019-03-05T10:11:15.6830422Z
         self.creation_time = data.get("creation_time")  # 1551780675
         self.update_time_iso = data.get("update_time_iso")  # 2019-03-05T10:11:15.6830422Z
@@ -509,6 +556,8 @@ class Tion:
 
 
 class TionApi:
+    _data: dict[Tion]
+
     def __init__(self, email: str, password: str, auth_fname="tion_auth", min_update_interval_sec=10):
         self._email = email
         self._password = password
@@ -521,7 +570,10 @@ class TionApi:
             self.authorization = None
             self._get_authorization()
         self._last_update = 0
-        self._data: Tion = []
+        self._data = {}
+        self._presets = {}
+        self._devices = {}
+        self._zones = {}
         self.get_data()
 
 
@@ -619,7 +671,6 @@ class TionApi:
         if not force and (time() - self._last_update) < self._min_update_interval:  # update only once per {min_update_interval} seconds
             return self._data is not None
 
-        self._data = []
         locations = self._get_url_response("https://api2.magicair.tion.ru/location")
         if locations is not None:
             for location in locations:
@@ -629,7 +680,12 @@ class TionApi:
                         presets = self._get_url_response(f"https://api2.magicair.tion.ru/preset/{zone_guid}")
                         if presets is not None:
                             z["__presets"] = presets
-                self._data.append(Tion(location))
+                guid = location.get("guid")
+                loc: Tion
+                if (loc := self._data.get(guid, None)) is not None:
+                    loc.load(location)
+                else:
+                    self._data[guid] = Tion(location)
             self._last_update = time()
             return True
 
@@ -638,8 +694,10 @@ class TionApi:
     def _get_zones_data(self, name_part: str=None, guid: str=None, force=False) -> list:
         result = []
         if self.get_data(force=force):
-            for location in self._data:
-                for zone in location.zones:
+            for loc_guid in self._data:
+                location = self._data[loc_guid]
+                for zone_guid in location.zones:
+                    zone = location.zones[zone_guid]
                     if any([
                        not name_part and not guid,
                        guid and zone.guid == guid,
@@ -652,15 +710,23 @@ class TionApi:
         zones_data = self._get_zones_data(name_part, guid)
         result = []
         for zone_data in zones_data:
-            result.append(Zone(zone_data, self))
+            guid = zone_data.guid
+            if (zone := self._zones.get(guid, None)) is not None:
+                zone.load(zone_data)
+            else:
+                zone = Zone(zone_data, self)
+                self._zones[guid] = zone
+            result.append(zone)
         return result
 
     def _get_zone_presets_data(self, name_part: str = None, guid: str = None, force=False) -> tuple[list, list]:
         presets_data = []
         zones = []
         if self.get_data(force=force):
-            for location in self._data:
-                for zone in location.zones:
+            for loc_guid in self._data:
+                location = self._data[loc_guid]
+                for zone_guid in location.zones:
+                    zone = location.zones[zone_guid]
                     for preset in zone.presets:
                         if any([
                                 not name_part and not guid,
@@ -675,15 +741,23 @@ class TionApi:
         presets_data, zones = self._get_zone_presets_data(name_part, guid)
         result = []
         for preset_data, zone in zip(presets_data, zones):
-            result.append(ZonePreset(preset_data, zone, self))
+            if self._presets.get(preset_data.guid, None) is not None:
+                preset = self._presets[preset_data.guid]
+                preset.load(preset_data, zone)
+            else:
+                preset = ZonePreset(preset_data, zone, self)
+                self._presets[preset_data.guid] = preset
+            result.append(preset)
         return result
 
     def _get_devices_data(self, name_part: str=None, guid: str=None, type: str=None, force=False) -> list:
         devices_data = []
         zones = []
         if self.get_data(force=force):
-            for location in self._data:
-                for zone in location.zones:
+            for loc_guid in self._data:
+                location = self._data[loc_guid]
+                for zone_guid in location.zones:
+                    zone = location.zones[zone_guid]
                     for device in zone.devices:
                         if any([
                                 not name_part and not guid and not type,
@@ -699,12 +773,16 @@ class TionApi:
         devices_data, zones = self._get_devices_data(name_part, guid, type)
         result = []
         for device_data, zone in zip(devices_data, zones):
-            if "co2" in device_data.type:
-                result.append(MagicAir(device_data, zone, self))
-            elif "breezer" in device_data.type or "O2" in device_data.type:
-                result.append(Breezer(device_data, zone, self))
-            else:  # pragma: no cover
-                _LOGGER.error(f"Unknown device type: {device_data.type}, contact the developer for support with data:\n{device_data}")
+            if (device := self._devices.get(device_data.guid, None)) is not None:
+                device.load(device_data, zone)
+                result.append(device)
+            else:
+                if "co2" in device_data.type:
+                    result.append(MagicAir(device_data, zone, self))
+                elif "breezer" in device_data.type or "O2" in device_data.type:
+                    result.append(Breezer(device_data, zone, self))
+                else:  # pragma: no cover
+                    _LOGGER.error(f"Unknown device type: {device_data.type}, contact the developer for support with data:\n{device_data}")
         return result
 
 
@@ -1073,7 +1151,7 @@ class ZonePreset:
         first_device = {
             "id": self._device_id,
             "speed": self._state_changes.get("speed", self.speed),
-            "speed_max_set": self._state_changes.get("speed", self.speed_max_set),
+            "speed_max_set": self._state_changes.get("speed_max_set", self.speed_max_set),
             "speed_min_set": self._state_changes.get("speed_min_set", self.speed_min_set),
             "t_set": self._state_changes.get("t_set", self.t_set),
             "is_on": self._state_changes.get("is_on", self.is_on),
@@ -1132,35 +1210,35 @@ def main():
     print(f"magicair.co2: {magicair.co2}")
     # getting breezer
     breezer = api.get_devices(name_part="breezer")[0]
-    # setting manual mode for breezer zone
-    breezer.zone.mode = "manual"
-    assert breezer.zone.send() is True, "Failed to send zone data"
-    print(f"breezer.zone.mode: {breezer.zone.mode}")
-    # setting breezer speed manually
-    breezer.speed = 3
-    assert breezer.send({"heater_mode": "maintenance"}) is True, "Failed to send breezer data"
-    print(f"breezer.is_on: {breezer.is_on}, breezer.speed: {breezer.speed}")
-    # setting air source to outside
-    breezer.gate = 2
-    assert breezer.send() is True, "Failed to send breezer data"
-    print(f"breezer.is_on: {breezer.is_on}, breezer.speed: {breezer.speed}, breezer.gate: {breezer.gate}")
-    # setting auto mode for breezer's zone
-    breezer.zone.mode = "auto"
-    assert breezer.zone.send() is True, "Failed to send zone data"
-    print(f"breezer.zone.mode: {breezer.zone.mode}")
-    # setting breezer minimum speed to 3 and maximum to 6
-    breezer.speed_min_set = 3
-    breezer.speed_max_set = 6
-    assert breezer.send() is True, "Failed to send breezer data"
-    print(f"breezer.speed_min_set: {breezer.speed_min_set}, breezer.speed_max_set: {breezer.speed_max_set}")
+    # # setting manual mode for breezer zone
+    # breezer.zone.mode = "manual"
+    # assert breezer.zone.send() is True, "Failed to send zone data"
+    # print(f"breezer.zone.mode: {breezer.zone.mode}")
+    # # setting breezer speed manually
+    # breezer.speed = 3
+    # assert breezer.send({"heater_mode": "maintenance"}) is True, "Failed to send breezer data"
+    # print(f"breezer.is_on: {breezer.is_on}, breezer.speed: {breezer.speed}")
+    # # setting air source to outside
+    # breezer.gate = 2
+    # assert breezer.send() is True, "Failed to send breezer data"
+    # print(f"breezer.is_on: {breezer.is_on}, breezer.speed: {breezer.speed}, breezer.gate: {breezer.gate}")
+    # # setting auto mode for breezer's zone
+    # breezer.zone.mode = "auto"
+    # assert breezer.zone.send() is True, "Failed to send zone data"
+    # print(f"breezer.zone.mode: {breezer.zone.mode}")
+    # # setting breezer minimum speed to 3 and maximum to 6
+    # breezer.speed_min_set = 3
+    # breezer.speed_max_set = 6
+    # assert breezer.send() is True, "Failed to send breezer data"
+    # print(f"breezer.speed_min_set: {breezer.speed_min_set}, breezer.speed_max_set: {breezer.speed_max_set}")
 
     presets = api.get_zone_presets()
     print(f"presets: {presets}")
-
-    preset = presets[0]
-    preset.t_set = 15
-    preset.name = "Ночь"
-    assert preset.send() is True, "Failed to send preset data"
+    #
+    # preset = presets[0]
+    # preset.t_set = 15
+    # preset.name = "Ночь"
+    # assert preset.send() is True, "Failed to send preset data"
 
 
 if __name__ == '__main__':
