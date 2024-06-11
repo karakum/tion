@@ -2,9 +2,9 @@ from setuptools import setup
 from os.path import join, dirname
 
 setup(name='tion',
-      version='1.29',
+      version='1.30',
       description='Tion Magic Air API',
-      url='http://github.com/airens/tion',
+      url='http://github.com/karakum/tion',
       author='Valeriy Chistyakov',
       author_email='airens@mail.ru',
       license='MIT',
