@@ -801,9 +801,9 @@ class MagicAir(TionZonesDevices):
             data: TionZonesDevicesData = device_data.data
             self._guid = device_data.guid
             self._name = device_data.name
-            self._co2 = data.co2
-            self._temperature = data.temperature
-            self._humidity = data.humidity
+            self._co2 = data.co2 if data.co2 != "NaN" else None
+            self._temperature = data.temperature if data.temperature != "NaN" else None
+            self._humidity = data.humidity if data.humidity != "NaN" else None
         return self.valid
 
 
