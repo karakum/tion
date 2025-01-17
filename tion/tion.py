@@ -591,7 +591,7 @@ class TionApi:
                             _LOGGER.error("Authorization failed!")
                             return None
                     else:  # pragma: no cover
-                        _LOGGER.debug(f"Status code while getting data is {response.status_code}, content:\n{response.text()}!")
+                        _LOGGER.debug(f"Status code while getting data is {response.status_code}, content:\n{response.text}!")
                         return None
             except requests.exceptions.RequestException as e:  # pragma: no cover
                 _LOGGER.error(f"Exception while getting data!\nException:{e}")
